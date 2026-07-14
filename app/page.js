@@ -1,49 +1,149 @@
-import Link from 'next/link';
+import Link from "next/link";
 
 export default function Home() {
   return (
-    <>
-      <header>
-        <nav>
-          <div className="logo">광고<span>잇다</span></div>
-          <div className="menu">
-            <Link href="/creators">인플루언서 검색</Link>
-            <Link href="/creator-register">인플루언서 등록</Link>
+    <main className="landing-page">
+      <header className="landing-header">
+        <nav className="landing-nav">
+          <Link href="/" className="brand-logo">
+            광고<span>잇다</span>
+          </Link>
+
+          <div className="landing-menu">
+            <Link href="/creators">크리에이터 찾기</Link>
             <Link href="/campaign">광고 의뢰</Link>
-            <Link href="/admin">관리자</Link>
+            <Link href="/login">로그인</Link>
+            <Link href="/signup" className="header-signup">
+              회원가입
+            </Link>
           </div>
         </nav>
       </header>
 
-      <section className="hero">
-        <div className="container hero-grid">
-          <div>
-            <div className="badge">실제 플랫폼 MVP</div>
-            <h1>광고주가 직접 찾고<br /><span>인플루언서가 직접 등록하는 플랫폼</span></h1>
-            <p className="lead">광고잇다는 지역, 카테고리, 채널, 단가 기준으로 광고주와 인플루언서를 연결합니다.</p>
-            <Link className="btn primary" href="/creators">인플루언서 찾기</Link>{' '}
-            <Link className="btn secondary" href="/creator-register">인플루언서 등록</Link>
+      <section className="landing-hero">
+        <div className="hero-glow hero-glow-one" />
+        <div className="hero-glow hero-glow-two" />
+
+        <div className="hero-container">
+          <div className="hero-content">
+            <div className="hero-badge">
+              <span className="badge-dot" />
+              광고주와 크리에이터의 새로운 연결
+            </div>
+
+            <h1>
+              광고에 필요한
+              <br />
+              모든 것을 <strong>잇는 플랫폼</strong>
+            </h1>
+
+            <p className="hero-copy">
+              광고주와 크리에이터를 안전하게 연결하고
+              <br />
+              함께 성장할 수 있는 광고 파트너를 만듭니다.
+            </p>
+
+            <div className="hero-actions">
+              <Link href="/campaign" className="action-primary">
+                광고 의뢰하기
+                <span>→</span>
+              </Link>
+
+              <Link href="/creators" className="action-secondary">
+                크리에이터 찾기
+              </Link>
+            </div>
+
+            <div className="hero-points">
+              <span>
+                <i>✓</i>
+                직접 선택하는 매칭
+              </span>
+              <span>
+                <i>✓</i>
+                제안부터 협업까지
+              </span>
+              <span>
+                <i>✓</i>
+                안전한 워크스페이스
+              </span>
+            </div>
           </div>
-          <div className="panel">
-            <h3>V2 MVP 기능</h3>
-            <br />
-            <p>✅ 인플루언서 검색</p>
-            <p>✅ 인플루언서 등록</p>
-            <p>✅ 광고주 캠페인 의뢰</p>
-            <p>✅ 관리자 페이지</p>
+
+          <div className="hero-visual">
+            <div className="visual-card main-card">
+              <div className="card-header">
+                <div>
+                  <span className="card-label">광고잇다 워크스페이스</span>
+                  <h2>협업 진행 현황</h2>
+                </div>
+                <span className="status-badge">진행 중</span>
+              </div>
+
+              <div className="partner-box">
+                <div className="partner-avatar">A</div>
+                <div>
+                  <strong>브랜드와 크리에이터 매칭</strong>
+                  <p>제안이 수락되어 협업이 시작되었습니다.</p>
+                </div>
+              </div>
+
+              <div className="progress-area">
+                <div className="progress-row">
+                  <span>협업 진행률</span>
+                  <strong>60%</strong>
+                </div>
+
+                <div className="progress-track">
+                  <div className="progress-fill" />
+                </div>
+              </div>
+
+              <div className="step-list">
+                <div className="step-item complete">
+                  <span>✓</span>
+                  <div>
+                    <strong>협업 제안</strong>
+                    <p>제안 수락 완료</p>
+                  </div>
+                </div>
+
+                <div className="step-item active">
+                  <span>2</span>
+                  <div>
+                    <strong>계약 및 협의</strong>
+                    <p>상세 조건을 조율하고 있습니다.</p>
+                  </div>
+                </div>
+
+                <div className="step-item">
+                  <span>3</span>
+                  <div>
+                    <strong>콘텐츠 진행</strong>
+                    <p>콘텐츠 제출 및 검수</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="floating-card floating-top">
+              <span className="floating-icon">✓</span>
+              <div>
+                <strong>제안 수락 완료</strong>
+                <p>새로운 협업이 시작됐어요.</p>
+              </div>
+            </div>
+
+            <div className="floating-card floating-bottom">
+              <span className="floating-icon blue">↗</span>
+              <div>
+                <strong>한곳에서 간편하게</strong>
+                <p>채팅부터 계약까지</p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
-
-      <section>
-        <div className="container grid">
-          <div className="card"><h3>광고주</h3><p>조건에 맞는 인플루언서를 직접 검색하고 캠페인을 의뢰합니다.</p></div>
-          <div className="card"><h3>인플루언서</h3><p>활동 지역, 채널, 단가, 포트폴리오를 등록합니다.</p></div>
-          <div className="card"><h3>관리자</h3><p>초기에는 수동 매칭으로 시장 반응을 빠르게 확인합니다.</p></div>
-        </div>
-      </section>
-
-      <footer>© 2026 광고잇다</footer>
-    </>
+    </main>
   );
 }
