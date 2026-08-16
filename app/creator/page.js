@@ -485,8 +485,17 @@ export default function CreatorPage() {
             <div>
               {notifications.slice(0, 5).map((notification, index) => (
                 <div
-                  key={notification.id}
-                  onClick={() => readNotification(notification.id)}
+                key={notification.id}
+                onClick={async () => {
+                  await readNotification(notification.id);
+              
+                  if (
+                    notification.type === 'chat' &&
+                    notification.proposal_id
+                  ) {
+                    window.location.href = `/workspace/${notification.proposal_id}`;
+                  }
+                }}
                   style={{
                     padding: '14px 0',
                     borderBottom:

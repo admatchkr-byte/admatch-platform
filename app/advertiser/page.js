@@ -12,12 +12,30 @@ const STATUS_LABELS = {
   cancelled: '취소됨',
 };
 
+async function openNotification(notification) {
+  if (!notification?.id) return;
+
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('id', notification.id);
+
+  if (error) {
+    console.error('알림 읽음 처리 실패:', error);
+  }
+
+  window.location.href = notification.proposal_id
+    ? `/workspace/${notification.proposal_id}`
+    : '/advertiser';
+}
 export default function AdvertiserPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [proposals, setProposals] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
 
   useEffect(() => {
     loadDashboard();
@@ -105,6 +123,17 @@ export default function AdvertiserPage() {
       );
 
       setProposals(proposalsWithCreatorName);
+      const { data: notificationData, error: notificationError } = await supabase
+  .from('notifications')
+  .select('*')
+  .eq('user_id', user.id)
+  .order('created_at', { ascending: false });
+
+if (notificationError) {
+  throw notificationError;
+}
+
+setNotifications(notificationData || []);
     } catch (error) {
       console.error(error);
       setMessage(
@@ -131,6 +160,11 @@ export default function AdvertiserPage() {
   const activeProposals = proposals.filter(
     (proposal) => proposal.status === 'accepted'
   ).length;
+  const unreadNotifications = notifications.filter(
+    (notification) => !notification.is_read
+  );
+  
+  const unreadCount = unreadNotifications.length;
 
   return (
     <main
@@ -168,19 +202,161 @@ export default function AdvertiserPage() {
             광고<span style={{ color: '#6c5ce7' }}>잇다</span>
           </Link>
 
-          <button
-            type="button"
-            onClick={handleLogout}
+          <div
+  style={{
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    position: 'relative',
+  }}
+>
+  <button
+    type="button"
+    onClick={() => setShowNotifications((current) => !current)}
+    style={{
+      position: 'relative',
+      border: '1px solid #d1d5db',
+      background: '#ffffff',
+      padding: '9px 12px',
+      borderRadius: 8,
+      cursor: 'pointer',
+    }}
+  >
+    🔔 알림
+
+    {unreadCount > 0 && (
+      <span
+        style={{
+          position: 'absolute',
+          top: -7,
+          right: -7,
+          minWidth: 20,
+          height: 20,
+          padding: '0 5px',
+          borderRadius: 20,
+          background: '#6c5ce7',
+          color: '#ffffff',
+          fontSize: 11,
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {unreadCount}
+      </span>
+    )}
+  </button>
+
+  <button
+    type="button"
+    onClick={handleLogout}
+    style={{
+      border: '1px solid #d1d5db',
+      background: '#ffffff',
+      padding: '9px 14px',
+      borderRadius: 8,
+      cursor: 'pointer',
+    }}
+  >
+    로그아웃
+  </button>
+
+  {showNotifications && (
+    <div
+      style={{
+        position: 'absolute',
+        top: 48,
+        right: 0,
+        width: 360,
+        maxHeight: 450,
+        overflowY: 'auto',
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        boxShadow: '0 10px 30px rgba(0,0,0,0.12)',
+        padding: 12,
+        zIndex: 100,
+      }}
+    >
+      <strong
+        style={{
+          display: 'block',
+          padding: '8px 6px 12px',
+        }}
+      >
+        알림 기록
+      </strong>
+
+      {notifications.length === 0 ? (
+        <p
+          style={{
+            color: '#6b7280',
+            fontSize: 13,
+            padding: 10,
+          }}
+        >
+          아직 알림이 없습니다.
+        </p>
+      ) : (
+        notifications.map((notification) => (
+          <Link
+            key={notification.id}
+            href={
+              notification.proposal_id
+                ? `/workspace/${notification.proposal_id}`
+                : '/advertiser'
+            }
             style={{
-              border: '1px solid #d1d5db',
-              background: '#ffffff',
-              padding: '9px 14px',
-              borderRadius: 8,
-              cursor: 'pointer',
+              display: 'block',
+              textDecoration: 'none',
+              color: 'inherit',
+              padding: 12,
+              borderTop: '1px solid #f3f4f6',
+              background: notification.is_read
+                ? '#ffffff'
+                : '#f5f3ff',
             }}
           >
-            로그아웃
-          </button>
+            <strong
+              style={{
+                display: 'block',
+                fontSize: 14,
+              }}
+            >
+              {notification.title || '알림'}
+            </strong>
+
+            {notification.message && (
+              <p
+                style={{
+                  margin: '5px 0 0',
+                  color: '#6b7280',
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}
+              >
+                {notification.message}
+              </p>
+            )}
+
+            <span
+              style={{
+                display: 'block',
+                marginTop: 7,
+                fontSize: 11,
+                color: '#9ca3af',
+              }}
+            >
+              {notification.is_read ? '읽음' : '새 알림'}
+            </span>
+          </Link>
+        ))
+      )}
+    </div>
+  )}
+</div>
+           
         </div>
       </header>
 
@@ -230,6 +406,7 @@ export default function AdvertiserPage() {
                 {userEmail}
               </p>
             )}
+      
           </div>
 
           <div

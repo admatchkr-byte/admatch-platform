@@ -6,6 +6,8 @@ import {
   useRef,
   useState,
 } from 'react';
+
+import html2canvas from 'html2canvas';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
@@ -29,7 +31,8 @@ export default function WorkspacePage() {
   const [activeTab, setActiveTab] = useState('chat');
   const [user, setUser] = useState(null);
   const [proposal, setProposal] = useState(null);
-
+  const [advertiserProfile, setAdvertiserProfile] = useState(null);
+  const [creatorProfile, setCreatorProfile] = useState(null);
   const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -50,6 +53,19 @@ export default function WorkspacePage() {
     paymentAmount: '',
     dueDate: '',
     specialTerms: '',
+    contentType: '',
+    channelItems: [
+      {
+        channel: '',
+        amount: '',
+      },
+    ],
+    revisionCount: '2',
+    secondaryUsage: '',
+    discountAmount: '',
+    settlementType: 'freelancer',
+    paymentMethod: 'bank_transfer',
+    taxInvoice: '',
   });
   const [savingContract, setSavingContract] = useState(false);
   const [agreeing, setAgreeing] = useState(false);
@@ -57,6 +73,8 @@ export default function WorkspacePage() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const bottomRef = useRef(null);
+  const contractRef = useRef(null);
+  const exportContractRef = useRef(null);
 
   const isAdvertiser = useMemo(() => {
     return Boolean(
@@ -213,6 +231,37 @@ export default function WorkspacePage() {
       }
 
       setProposal(proposalData);
+      await supabase
+  .from('notifications')
+  .update({ is_read: true })
+  .eq('user_id', currentUser.id)
+  .eq('proposal_id', proposalId)
+  .eq('type', 'chat')
+  .eq('is_read', false);
+      const { data: profilesData, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id, name, email, contact')
+      .in('id', [
+        proposalData.advertiser_id,
+        proposalData.creator_id,
+      ]);
+    
+    if (profilesError) {
+      throw profilesError;
+    }
+    
+    const advertiser =
+      profilesData?.find(
+        (profile) => profile.id === proposalData.advertiser_id
+      ) || null;
+    
+    const creator =
+      profilesData?.find(
+        (profile) => profile.id === proposalData.creator_id
+      ) || null;
+    
+    setAdvertiserProfile(advertiser);
+    setCreatorProfile(creator);
 
       await Promise.all([
         loadMessages(currentUser.id),
@@ -299,10 +348,11 @@ export default function WorkspacePage() {
 
   async function loadContract() {
     const { data, error } = await supabase
-      .from('contracts')
-      .select('*')
-      .eq('proposal_id', proposalId)
-      .maybeSingle();
+  .from('contracts')
+  .select('*')
+  .eq('proposal_id', proposalId)
+  .eq('is_voided', false)
+  .maybeSingle();
 
     if (error) throw error;
 
@@ -317,6 +367,35 @@ export default function WorkspacePage() {
           : '',
         dueDate: data.due_date || '',
         specialTerms: data.special_terms || '',
+        contentType: data.content_type || '',
+        channelItems:
+        Array.isArray(data.channel_items) && data.channel_items.length > 0
+          ? data.channel_items.map((item) => ({
+              channel: item.channel || '',
+              amount:
+                item.amount !== null && item.amount !== undefined
+                  ? String(item.amount)
+                  : '',
+            }))
+          : [
+              {
+                channel: '',
+                amount: '',
+              },
+            ],
+
+        secondaryUsage: data.secondary_usage || '',
+        discountAmount: data.discount_amount
+          ? String(data.discount_amount)
+          : '',
+          settlementType: data.settlement_type || 'freelancer',
+        paymentMethod: data.payment_method || 'bank_transfer',
+        taxInvoice:
+          data.tax_invoice === true
+            ? 'issued'
+            : data.tax_invoice === false
+            ? 'not_issued'
+            : '',
       });
     }
   }
@@ -348,12 +427,27 @@ export default function WorkspacePage() {
         is_read: false,
       });
 
-    if (error) {
-      console.error(error);
-      setNotice(error.message || '메시지 전송에 실패했습니다.');
-    } else {
-      setChatInput('');
-    }
+      if (error) {
+        console.error(error);
+        setNotice(error.message || '메시지 전송에 실패했습니다.');
+      } else {
+        const { error: notificationError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: receiverId,
+            proposal_id: proposalId,
+            type: 'chat',
+            title: '새 메시지가 도착했습니다.',
+            message: message,
+            is_read: false,
+          });
+      
+        if (notificationError) {
+          console.error('채팅 알림 생성 실패:', notificationError);
+        }
+      
+        setChatInput('');
+      }
 
     setSendingMessage(false);
   }
@@ -453,7 +547,7 @@ export default function WorkspacePage() {
   }
 
   async function reviewSubmission(submissionId, nextStatus) {
-    if (!isAdvertiser) return;
+    if (!isCreator) return;
 
     let revisionMessage = null;
 
@@ -505,60 +599,280 @@ export default function WorkspacePage() {
 
   function changeContractField(event) {
     const { name, value } = event.target;
-
+  
     setContractForm((current) => ({
       ...current,
       [name]: value,
     }));
   }
-
+  
+  function changeChannelItem(index, field, value) {
+    setContractForm((current) => {
+      const nextItems = [...current.channelItems];
+  
+      nextItems[index] = {
+        ...nextItems[index],
+        [field]: value,
+      };
+  
+      return {
+        ...current,
+        channelItems: nextItems,
+      };
+    });
+  }
+  
+  function addChannelItem() {
+    setContractForm((current) => {
+      if (current.channelItems.length >= 5) {
+        return current;
+      }
+  
+      return {
+        ...current,
+        channelItems: [
+          ...current.channelItems,
+          {
+            channel: '',
+            amount: '',
+          },
+        ],
+      };
+    });
+  }
+  
+  function removeChannelItem(index) {
+    setContractForm((current) => {
+      if (current.channelItems.length <= 1) {
+        return current;
+      }
+  
+      return {
+        ...current,
+        channelItems: current.channelItems.filter(
+          (_, itemIndex) => itemIndex !== index
+        ),
+      };
+    });
+  }
+  async function downloadContractImage() {
+    if (!exportContractRef.current) return;
+  
+    try {
+      const canvas = await html2canvas(exportContractRef.current, {
+        scale: 3,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+      });
+  
+      const image = canvas.toDataURL('image/png', 1.0);
+  
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = `광고잇다_계약서_${String(proposalId).slice(0, 8)}.png`;
+  
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('계약서 이미지 저장 실패:', error);
+      setNotice('계약서 이미지 저장에 실패했습니다.');
+    }
+  }
+  
   async function saveContract(event) {
     event.preventDefault();
-
-    if (!isAdvertiser) return;
-
+  
+    if (!isCreator) return;
+    if (
+      contract &&
+      (contract.advertiser_agreed || contract.creator_agreed)
+    ) {
+      setNotice(
+        '한쪽이라도 계약에 동의한 이후에는 계약서를 수정할 수 없습니다. 변경이 필요하면 기존 계약서를 폐기하고 새로 작성해 주세요.'
+      );
+      return;
+    }
+  
     if (
       !contractForm.contractTitle.trim() ||
       !contractForm.workScope.trim()
     ) {
-      setNotice('계약 제목과 업무 범위를 입력해 주세요.');
+      setNotice('계약 제목과 협업 내용을 입력해 주세요.');
       return;
     }
 
     setSavingContract(true);
     setNotice('');
+    const paymentAmount = contractForm.channelItems.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    );
+    
+    const discountAmount = Number(contractForm.discountAmount || 0);
+    
+    const supplyAmount = Math.max(
+      paymentAmount - discountAmount,
+      0
+    );
+    
+    const isFreelancer =
+    contractForm.settlementType === 'freelancer';
+  
+  const withholdingAmount = isFreelancer
+    ? Math.round(supplyAmount * 0.033)
+    : 0;
+  
+  const vatAmount = !isFreelancer
+    ? Math.round(supplyAmount * 0.1)
+    : 0;
+  
+  const finalAmount = isFreelancer
+    ? supplyAmount - withholdingAmount
+    : supplyAmount + vatAmount;
 
     const payload = {
       proposal_id: proposalId,
       advertiser_id: proposal.advertiser_id,
       creator_id: proposal.creator_id,
-      contract_title:
-        contractForm.contractTitle.trim(),
+    
+      contract_title: contractForm.contractTitle.trim(),
       work_scope: contractForm.workScope.trim(),
-      payment_amount: contractForm.paymentAmount
-        ? Number(contractForm.paymentAmount)
-        : null,
+      settlement_type: contractForm.settlementType,
+    
+      payment_amount: paymentAmount,
+      discount_amount: discountAmount,
+      vat_amount: vatAmount,
+      withholding_amount: withholdingAmount,
+      final_amount: finalAmount,
+
       due_date: contractForm.dueDate || null,
+    
       special_terms:
         contractForm.specialTerms.trim() || null,
+    
+      content_type:
+        contractForm.contentType.trim() || null,
+    
+     channel_items: contractForm.channelItems
+  .filter((item) => item.channel.trim())
+  .slice(0, 5)
+  .map((item) => ({
+    channel: item.channel.trim(),
+    amount: item.amount ? Number(item.amount) : 0,
+  })),
+    
+      revision_count: contractForm.revisionCount
+        ? Number(contractForm.revisionCount)
+        : 0,
+    
+      secondary_usage:
+        contractForm.secondaryUsage.trim() || null,
+    
+      payment_method:
+        contractForm.paymentMethod || null,
+    
+      tax_invoice:
+        contractForm.paymentMethod === 'bank_transfer'
+          ? contractForm.taxInvoice === 'issued'
+            ? true
+            : contractForm.taxInvoice === 'not_issued'
+            ? false
+            : null
+          : null,
+    
       status: 'waiting',
       updated_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
-      .from('contracts')
-      .upsert(payload, {
-        onConflict: 'proposal_id',
-      });
+    let error;
 
-    if (error) {
-      setNotice(error.message || '계약서 저장에 실패했습니다.');
-    } else {
-      await loadContract();
-      setNotice('계약서가 저장되었습니다.');
-    }
+if (contract) {
+  const result = await supabase
+    .from('contracts')
+    .update(payload)
+    .eq('id', contract.id);
+
+  error = result.error;
+} else {
+  const result = await supabase
+    .from('contracts')
+    .insert(payload);
+
+  error = result.error;
+}
+
+      if (error) {
+        setNotice(error.message || '계약서 저장에 실패했습니다.');
+      } else {
+      
+        await loadContract();
+      
+        setNotice(
+          contract
+            ? '계약서가 수정되었습니다.'
+            : '계약서가 생성되었습니다.'
+        );
+      }
 
     setSavingContract(false);
+  }
+  async function voidContract() {
+    if (!contract || !user || !isCreator) return;
+  
+    const confirmed = window.confirm(
+      '이 계약서를 폐기하시겠습니까? 폐기 후에는 기존 계약서를 다시 사용할 수 없습니다.'
+    );
+  
+    if (!confirmed) return;
+  
+    setNotice('');
+  
+    const now = new Date().toISOString();
+  
+    const { error: voidError } = await supabase
+      .from('contracts')
+      .update({
+        is_voided: true,
+        voided_at: now,
+        updated_at: now,
+      })
+      .eq('id', contract.id);
+  
+    if (voidError) {
+      console.error('계약서 폐기 실패:', voidError);
+      setNotice(voidError.message || '계약서 폐기에 실패했습니다.');
+      return;
+    }
+  
+    const receiverId = proposal.advertiser_id;
+  
+    const { error: notificationError } = await supabase
+      .from('notifications')
+      .insert({
+        user_id: receiverId,
+        proposal_id: proposalId,
+        type: 'contract_voided',
+        title: '계약서가 폐기되었습니다.',
+        message:
+          '기존 계약서가 폐기되었습니다. 새로운 계약서가 작성되면 다시 확인해 주세요.',
+        is_read: false,
+      });
+  
+    if (notificationError) {
+      console.error(
+        '계약서 폐기 알림 생성 실패:',
+        notificationError
+      );
+    }
+  
+    setContract(null);
+  
+    await loadContract();
+  
+    setNotice(
+      '계약서가 폐기되었습니다. 새로운 계약서를 작성해 주세요.'
+    );
   }
 
   async function agreeContract() {
@@ -686,6 +1000,7 @@ export default function WorkspacePage() {
             key={key}
             type="button"
             onClick={() => setActiveTab(key)}
+            
             style={{
               ...tabButtonStyle,
               ...(activeTab === key
@@ -733,9 +1048,22 @@ export default function WorkspacePage() {
                           : '#111827',
                       }}
                     >
-                      <div>{item.message}</div>
+                      <div
+  style={{
+    fontSize: 11,
+    fontWeight: 700,
+    marginBottom: 5,
+    opacity: 0.8,
+  }}
+>
+  {item.sender_id === proposal.advertiser_id
+    ? '광고주'
+    : '크리에이터'}
+</div>
 
-                      <div style={messageMetaStyle}>
+<div>{item.message}</div>
+
+<div style={messageMetaStyle}>
                         {isMine && (
                           <span>
                             {item.is_read ? '읽음' : '전송됨'}
@@ -921,7 +1249,7 @@ export default function WorkspacePage() {
 
       {activeTab === 'contract' && (
         <section>
-          {isAdvertiser && (
+          {isCreator && (
             <form
               onSubmit={saveContract}
               style={panelStyle}
@@ -941,7 +1269,7 @@ export default function WorkspacePage() {
                 />
               </FormField>
 
-              <FormField label="업무 범위">
+              <FormField label="협업 내용">
                 <textarea
                   name="workScope"
                   value={contractForm.workScope}
@@ -965,7 +1293,7 @@ export default function WorkspacePage() {
                   />
                 </FormField>
 
-                <FormField label="납품 예정일">
+                <FormField label="업로드 예정일">
                   <input
                     name="dueDate"
                     type="date"
@@ -975,6 +1303,181 @@ export default function WorkspacePage() {
                   />
                 </FormField>
               </div>
+              <div style={twoColumnStyle}>
+  <FormField label="콘텐츠 유형">
+    <input
+      name="contentType"
+      value={contractForm.contentType}
+      onChange={changeContractField}
+      placeholder="예: 인스타그램 릴스"
+      style={inputStyle}
+    />
+  </FormField>
+
+  <FormField label="업로드 채널 및 채널별 금액">
+  <div style={{ display: 'grid', gap: 12 }}>
+    {contractForm.channelItems.map((item, index) => (
+      <div
+        key={index}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 180px auto',
+          gap: 10,
+          alignItems: 'center',
+        }}
+      >
+        <input
+          type="text"
+          value={item.channel}
+          onChange={(event) =>
+            changeChannelItem(
+              index,
+              'channel',
+              event.target.value
+            )
+          }
+          placeholder={`채널 ${index + 1} 예: 인스타그램 릴스`}
+          style={inputStyle}
+        />
+
+        <input
+          type="number"
+          min="0"
+          value={item.amount}
+          onChange={(event) =>
+            changeChannelItem(
+              index,
+              'amount',
+              event.target.value
+            )
+          }
+          placeholder="금액"
+          style={inputStyle}
+        />
+
+        <button
+          type="button"
+          onClick={() => removeChannelItem(index)}
+          disabled={contractForm.channelItems.length <= 1}
+          style={secondaryButtonStyle}
+        >
+          삭제
+        </button>
+      </div>
+    ))}
+
+    <div>
+      <button
+        type="button"
+        onClick={addChannelItem}
+        disabled={contractForm.channelItems.length >= 5}
+        style={secondaryButtonStyle}
+      >
+        + 채널 추가
+      </button>
+
+      <span
+        style={{
+          marginLeft: 10,
+          color: '#6b7280',
+          fontSize: 13,
+        }}
+      >
+        최대 5개
+      </span>
+    </div>
+  </div>
+</FormField>
+
+</div>
+
+<div style={twoColumnStyle}>
+  <FormField label="수정 가능 횟수">
+    <input
+      name="revisionCount"
+      type="number"
+      min="0"
+      value={contractForm.revisionCount}
+      onChange={changeContractField}
+      style={inputStyle}
+    />
+  </FormField>
+
+  <FormField label="할인 금액">
+    <input
+      name="discountAmount"
+      type="number"
+      min="0"
+      value={contractForm.discountAmount}
+      onChange={changeContractField}
+      placeholder="0"
+      style={inputStyle}
+    />
+  </FormField>
+</div>
+
+<FormField label="2차 활용 범위">
+  <textarea
+    name="secondaryUsage"
+    value={contractForm.secondaryUsage}
+    onChange={changeContractField}
+    placeholder="예: 업체 SNS 업로드 허용, 유료 광고 활용 불가"
+    rows={3}
+    style={textareaStyle}
+  />
+</FormField>
+
+<FormField label="정산 유형">
+  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+    <label>
+      <input
+        type="radio"
+        name="settlementType"
+        value="freelancer"
+        checked={contractForm.settlementType === 'freelancer'}
+        onChange={changeContractField}
+      />
+      {' '}개인(프리랜서) - 3.3% 공제
+    </label>
+
+    <label>
+      <input
+        type="radio"
+        name="settlementType"
+        value="business"
+        checked={contractForm.settlementType === 'business'}
+        onChange={changeContractField}
+      />
+      {' '}사업자 - 세금계산서 발행
+    </label>
+  </div>
+</FormField>
+
+<FormField label="결제 방식">
+  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+    <label>
+      <input
+        type="radio"
+        name="paymentMethod"
+        value="bank_transfer"
+        checked={contractForm.paymentMethod === 'bank_transfer'}
+        onChange={changeContractField}
+      />
+      {' '}계좌이체
+    </label>
+
+    <label>
+      <input
+        type="radio"
+        name="paymentMethod"
+        value="card"
+        checked={contractForm.paymentMethod === 'card'}
+        onChange={changeContractField}
+      />
+      {' '}카드결제
+    </label>
+  </div>
+</FormField>
 
               <FormField label="특약 사항">
                 <textarea
@@ -987,106 +1490,1287 @@ export default function WorkspacePage() {
               </FormField>
 
               <button
-                type="submit"
-                disabled={savingContract}
-                style={primaryButtonStyle}
-              >
-                {savingContract
-                  ? '저장 중...'
-                  : contract
-                  ? '계약서 수정'
-                  : '계약서 생성'}
-              </button>
+  type="submit"
+  disabled={
+    savingContract ||
+    Boolean(
+      contract &&
+      (contract.advertiser_agreed || contract.creator_agreed)
+    )
+  }
+  style={{
+    ...primaryButtonStyle,
+    opacity:
+      contract &&
+      (contract.advertiser_agreed || contract.creator_agreed)
+        ? 0.5
+        : 1,
+    cursor:
+      contract &&
+      (contract.advertiser_agreed || contract.creator_agreed)
+        ? 'not-allowed'
+        : 'pointer',
+  }}
+>
+  {savingContract
+    ? '저장 중...'
+    : contract &&
+      (contract.advertiser_agreed || contract.creator_agreed)
+    ? '동의 후 수정 불가'
+    : contract
+    ? '계약서 수정'
+    : '계약서 생성'}
+</button>
             </form>
           )}
 
           <div style={{ marginTop: 28 }}>
-            {!contract ? (
-              <div style={panelStyle}>
-                <h3>아직 작성된 계약서가 없습니다.</h3>
-                <p style={mutedStyle}>
-                  광고주가 계약서를 작성하면 이곳에서 확인할 수
-                  있습니다.
-                </p>
+          {!contract ? (
+  <div style={panelStyle}>
+    <h3>아직 작성된 계약서가 없습니다.</h3>
+    <p style={mutedStyle}>
+      크리에이터가 계약서를 작성하면 이곳에서 확인할 수 있습니다.
+    </p>
+  </div>
+) : (
+  <div style={contractPreviewWrapperStyle}>
+ <article ref={contractRef} style={a4ContractStyle}>
+
+        {/* 상단 로고 및 제목 */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            borderBottom: '2px solid #1e3a8a',
+            paddingBottom: 10,
+            marginBottom: 14,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 900,
+                color: '#111827',
+                marginBottom: 8,
+              }}
+            >
+              광고<span style={{ color: '#6c5ce7' }}>잇다</span>
+            </div>
+      
+            <h1
+              style={{
+                margin: 0,
+                fontSize: 22,
+                fontWeight: 800,
+                color: '#111827',
+              }}
+            >
+              광고 콘텐츠 협업 계약서
+            </h1>
+          </div>
+      
+          <div
+            style={{
+              textAlign: 'right',
+              fontSize: 12,
+              lineHeight: 1.8,
+              color: '#6b7280',
+            }}
+          >
+            <div>
+              계약번호
+            </div>
+      
+            <strong style={{ color: '#111827' }}>
+              {String(proposalId).slice(0, 8).toUpperCase()}
+            </strong>
+      
+            <div style={{ marginTop: 6 }}>
+              계약 상태
+            </div>
+      
+            <strong
+              style={{
+                color:
+                  contract.status === 'completed'
+                    ? '#047857'
+                    : '#92400e',
+              }}
+            >
+              {contract.status === 'completed'
+                ? '계약 체결 완료'
+                : '계약 동의 진행 중'}
+            </strong>
+          </div>
+        </div>
+      
+        {/* 광고주 / 크리에이터 정보 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            계약 당사자 정보
+          </h2>
+      
+          <table
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: 13,
+            }}
+          >
+            <tbody>
+              <tr>
+                <td
+                  colSpan="2"
+                  style={{
+                    padding: 10,
+                    background: '#eff6ff',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 800,
+                    color: '#1e3a8a',
+                  }}
+                >
+                  광고주 정보
+                </td>
+      
+                <td
+                  colSpan="2"
+                  style={{
+                    padding: 10,
+                    background: '#eff6ff',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 800,
+                    color: '#1e3a8a',
+                  }}
+                >
+                  크리에이터 정보
+                </td>
+              </tr>
+      
+              <tr>
+                <td
+                  style={{
+                    width: '14%',
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  브랜드명
+                </td>
+      
+                <td
+                  style={{
+                    width: '36%',
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {proposal.brand_name || '-'}
+                </td>
+      
+                <td
+                  style={{
+                    width: '14%',
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  이름
+                </td>
+      
+                <td
+                  style={{
+                    width: '36%',
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {creatorProfile?.name || '-'}
+                </td>
+              </tr>
+      
+              <tr>
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  담당자
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {advertiserProfile?.name || '-'}
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  연락처
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {creatorProfile?.contact || '-'}
+                </td>
+              </tr>
+      
+              <tr>
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  연락처
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {advertiserProfile?.contact || '-'}
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  이메일
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {creatorProfile?.email || '-'}
+                </td>
+              </tr>
+      
+              <tr>
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 700,
+                  }}
+                >
+                  이메일
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  {advertiserProfile?.email || '-'}
+                </td>
+      
+                <td
+                  style={{
+                    padding: 10,
+                    background: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                  }}
+                />
+      
+                <td
+                  style={{
+                    padding: 10,
+                    border: '1px solid #cbd5e1',
+                  }}
+                />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      
+        {/* 계약 기본 정보 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            계약 기본 정보
+          </h2>
+      
+          <table
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: 13,
+            }}
+          >
+            <tbody>
+              <tr>
+                <td style={contractTableLabelStyle}>계약명</td>
+                <td style={contractTableValueStyle}>
+                  {contract.contract_title || '-'}
+                </td>
+      
+                <td style={contractTableLabelStyle}>콘텐츠 유형</td>
+                <td style={contractTableValueStyle}>
+                  {contract.content_type || '-'}
+                </td>
+              </tr>
+      
+              <tr>
+                <td style={contractTableLabelStyle}>업로드 채널</td>
+                <td style={contractTableValueStyle}>
+                {Array.isArray(contract.channel_items) &&
+contract.channel_items.length > 0
+  ? contract.channel_items
+      .map((item) => item.channel)
+      .join(', ')
+  : '-'}
+                </td>
+      
+                <td style={contractTableLabelStyle}>업로드 예정일</td>
+                <td style={contractTableValueStyle}>
+                  {formatDate(contract.due_date)}
+                </td>
+              </tr>
+      
+              <tr>
+                <td style={contractTableLabelStyle}>수정 가능 횟수</td>
+                <td style={contractTableValueStyle}>
+                  {contract.revision_count ?? 0}회
+                </td>
+      
+                <td style={contractTableLabelStyle}>2차 활용</td>
+                <td style={contractTableValueStyle}>
+                  {contract.secondary_usage || '-'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      
+        {/* 협업 내용 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            협업 내용
+          </h2>
+      
+          <div
+            style={{
+              padding: 8,
+              border: '1px solid #cbd5e1',
+              minHeight: 36,
+              fontSize: 11,
+              lineHeight: 1.4,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {contract.work_scope || '-'}
+          </div>
+        </div>
+      
+        {/* 비용 내역 */}
+<div style={{ marginBottom: 14 }}>
+  <h2
+    style={{
+      fontSize: 14,
+      margin: '0 0 10px',
+      color: '#1e3a8a',
+    }}
+  >
+    비용 내역
+  </h2>
+
+  <table
+    style={{
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 13,
+    }}
+  >
+    <tbody>
+      {Array.isArray(contract.channel_items) &&
+        contract.channel_items.map((item, index) => (
+          <tr key={index}>
+            <td style={contractTableLabelStyle}>
+              {item.channel || `채널 ${index + 1}`}
+            </td>
+
+            <td style={contractTableValueStyle}>
+              {Number(item.amount || 0).toLocaleString()}원
+            </td>
+          </tr>
+        ))}
+
+{Number(contract.discount_amount || 0) > 0 && (
+  <tr>
+    <td style={contractTableLabelStyle}>할인 금액</td>
+    <td style={contractTableValueStyle}>
+      {Number(contract.discount_amount || 0).toLocaleString()}원
+    </td>
+  </tr>
+)}
+
+<tr>
+  <td
+    style={{
+      ...contractTableLabelStyle,
+      borderTop: '3px solid #1e3a8a',
+      background: '#f8fafc',
+      fontWeight: 800,
+    }}
+  >
+    총 금액
+  </td>
+
+  <td
+    style={{
+      ...contractTableValueStyle,
+      borderTop: '3px solid #1e3a8a',
+      background: '#f8fafc',
+      fontWeight: 800,
+    }}
+  >
+    {Number(
+      (contract.payment_amount || 0) -
+      (contract.discount_amount || 0)
+    ).toLocaleString()}원
+  </td>
+</tr>
+
+{contract.settlement_type === 'freelancer' ? (
+  <tr>
+    <td
+      style={{
+        ...contractTableLabelStyle,
+        background: '#f8fafc',
+      }}
+    >
+      3.3% 공제
+    </td>
+
+    <td
+      style={{
+        ...contractTableValueStyle,
+        background: '#f8fafc',
+      }}
+    >
+      -{Number(contract.withholding_amount || 0).toLocaleString()}원
+    </td>
+  </tr>
+) : (
+  <tr>
+    <td
+      style={{
+        ...contractTableLabelStyle,
+        background: '#f8fafc',
+      }}
+    >
+      부가세 (10%)
+    </td>
+
+    <td
+      style={{
+        ...contractTableValueStyle,
+        background: '#f8fafc',
+      }}
+    >
+      {Number(contract.vat_amount || 0).toLocaleString()}원
+    </td>
+  </tr>
+)}
+
+<tr>
+  <td
+    style={{
+      ...contractTableLabelStyle,
+      background: '#eff6ff',
+      color: '#1e3a8a',
+      fontWeight: 800,
+    }}
+  >
+    {contract.settlement_type === 'freelancer'
+  ? '실지급 금액'
+  : '최종 결제 금액'}
+  </td>
+
+  <td
+    style={{
+      ...contractTableValueStyle,
+      background: '#eff6ff',
+      color: '#1e3a8a',
+      fontWeight: 900,
+      fontSize: 18,
+    }}
+  >
+    {Number(contract.final_amount || 0).toLocaleString()}원
+  </td>
+</tr>
+    </tbody>
+  </table>
+</div>
+      
+        {/* 결제 방식 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            결제 방식
+          </h2>
+      
+          <div
+            style={{
+              padding: 16,
+              border: '1px solid #cbd5e1',
+              fontSize: 14,
+              lineHeight: 2,
+            }}
+          >
+            <strong>
+              {contract.payment_method === 'card'
+                ? '☑ 카드결제'
+                : '☑ 계좌이체'}
+            </strong>
+      
+          </div>
+        </div>
+      
+        {/* 계약 조건 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 14,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            계약 조건
+          </h2>
+      
+          <div
+            style={{
+              border: '1px solid #cbd5e1',
+              padding: 8,
+              fontSize: 10,
+              lineHeight: 1.4,
+            }}
+          >
+           <p style={{ margin: '0 0 4px' }}>
+  1. 크리에이터는 상호 합의 협업 내용 및 일정에 따라 콘텐츠를 제작하고 제출합니다.
+</p>
+
+<p style={{ margin: '0 0 4px' }}>
+  2. 광고주는 계약된 범위 내에서 콘텐츠의 검수 및 수정을 요청할 수 있습니다.
+</p>
+
+<p style={{ margin: '0 0 4px' }}>
+  3. 계약 범위를 초과하는 추가 제작 및 재촬영은 양측 협의에 따라 별도의 비용이 발생할 수 있습니다.
+</p>
+
+<p style={{ margin: 0 }}>
+  4. 콘텐츠의 저작권 및 2차 활용 범위는 본 계약서에 기재된 내용과 양측의 별도 합의에 따릅니다.
+</p>
+          </div>
+        </div>
+      
+        {/* 특약 사항 */}
+        <div style={{ marginBottom: 14 }}>
+          <h2
+            style={{
+              fontSize: 17,
+              margin: '0 0 10px',
+              color: '#1e3a8a',
+            }}
+          >
+            특약 사항
+          </h2>
+      
+          <div
+            style={{
+              minHeight: 36,
+              padding: 8,
+              border: '1px solid #cbd5e1',
+              fontSize: 11,
+              lineHeight: 1.4,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {contract.special_terms ||
+              '별도의 특약 사항이 없습니다.'}
+          </div>
+        </div>
+      
+        {/* 계약 동의 */}
+        <div
+          style={{
+            borderTop: '2px solid #1e3a8a',
+            paddingTop: 10,
+          }}
+        >
+          <p
+            style={{
+              textAlign: 'center',
+              fontSize: 14,
+              lineHeight: 1.8,
+              marginBottom: 10,
+            }}
+          >
+            광고주와 크리에이터는 위 계약 내용을 충분히 확인하였으며
+            이에 동의합니다.
+          </p>
+      
+          <div style={signatureGridStyle}>
+            <div style={signatureBoxStyle}>
+              <span style={contractLabelStyle}>
+                광고주
+              </span>
+      
+              <strong>
+                {advertiserProfile?.name ||
+                  proposal.brand_name ||
+                  '광고주'}
+              </strong>
+      
+              <div style={{ marginTop: 10 }}>
+                {contract.advertiser_agreed
+                  ? '✓ 동의 완료'
+                  : '동의 대기'}
               </div>
-            ) : (
-              <article style={panelStyle}>
-                <div style={cardHeaderStyle}>
-                  <div>
-                    <span style={statusBadgeStyle}>
-                      {contract.status === 'completed'
-                        ? '계약 완료'
-                        : '동의 대기'}
-                    </span>
-
-                    <h2>{contract.contract_title}</h2>
-                  </div>
-                </div>
-
-                <ContractItem
-                  label="업무 범위"
-                  value={contract.work_scope}
-                />
-                <ContractItem
-                  label="계약 금액"
-                  value={
-                    contract.payment_amount
-                      ? `${Number(
-                          contract.payment_amount
-                        ).toLocaleString()}원`
-                      : '금액 협의'
-                  }
-                />
-                <ContractItem
-                  label="납품 예정일"
-                  value={formatDate(contract.due_date)}
-                />
-                <ContractItem
-                  label="특약 사항"
-                  value={contract.special_terms || '없음'}
-                />
-
-                <div style={agreementGridStyle}>
-                  <AgreementBox
-                    label="광고주 동의"
-                    agreed={contract.advertiser_agreed}
-                    agreedAt={contract.advertiser_agreed_at}
-                  />
-
-                  <AgreementBox
-                    label="크리에이터 동의"
-                    agreed={contract.creator_agreed}
-                    agreedAt={contract.creator_agreed_at}
-                  />
-                </div>
-
-                {contract.status !== 'completed' &&
-                  !(
-                    (isAdvertiser &&
-                      contract.advertiser_agreed) ||
-                    (isCreator && contract.creator_agreed)
-                  ) && (
-                    <button
-                      type="button"
-                      disabled={agreeing}
-                      onClick={agreeContract}
-                      style={{
-                        ...primaryButtonStyle,
-                        marginTop: 20,
-                      }}
-                    >
-                      {agreeing
-                        ? '처리 중...'
-                        : '계약 내용 확인 및 동의'}
-                    </button>
+      
+              {contract.advertiser_agreed_at && (
+                <span style={signatureDateStyle}>
+                  {formatDateTime(
+                    contract.advertiser_agreed_at
                   )}
+                </span>
+              )}
+            </div>
+      
+            <div style={signatureBoxStyle}>
+              <span style={contractLabelStyle}>
+                크리에이터
+              </span>
+      
+              <strong>
+                {creatorProfile?.name || '크리에이터'}
+              </strong>
+      
+              <div style={{ marginTop: 10 }}>
+                {contract.creator_agreed
+                  ? '✓ 동의 완료'
+                  : '동의 대기'}
+              </div>
+      
+              {contract.creator_agreed_at && (
+                <span style={signatureDateStyle}>
+                  {formatDateTime(
+                    contract.creator_agreed_at
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+      
+          <div
+            style={{
+              textAlign: 'center',
+              marginTop: 40,
+              fontWeight: 900,
+              fontSize: 20,
+            }}
+          >
+            광고<span style={{ color: '#6c5ce7' }}>잇다</span>
+          </div>
+        </div>
 
-                {contract.status === 'completed' && (
-                  <div style={completedContractStyle}>
-                    양측 동의가 완료되어 계약이 체결되었습니다.
-                  </div>
-                )}
-              </article>
+      </article>
+
+  {/* 이미지 저장 전용 A4 계약서 */}
+<div
+ ref={exportContractRef}
+style={{
+  position: 'fixed',
+  left: '-10000px',
+  top: 0,
+  width: '210mm',
+  height: '297mm',
+  padding: '9mm 10mm 7mm',
+  boxSizing: 'border-box',
+  background: '#ffffff',
+  color: '#111827',
+  fontFamily: 'Arial, sans-serif',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+}}
+>
+{/* 상단 */}
+<div
+  style={{
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    borderBottom: '2px solid #1e3a8a',
+    paddingBottom: 8,
+    marginBottom: 10,
+  }}
+>
+  <div>
+    <div
+      style={{
+        fontSize: 17,
+        fontWeight: 900,
+        marginBottom: 5,
+      }}
+    >
+      광고<span style={{ color: '#6c5ce7' }}>잇다</span>
+    </div>
+
+    <div
+      style={{
+        fontSize: 23,
+        fontWeight: 900,
+      }}
+    >
+      광고 콘텐츠 협업 계약서
+    </div>
+  </div>
+
+  <div
+    style={{
+      textAlign: 'right',
+      fontSize: 10,
+      lineHeight: 1.7,
+      color: '#6b7280',
+    }}
+  >
+    <div>계약번호</div>
+    <strong style={{ color: '#111827' }}>
+      {String(proposalId).slice(0, 8).toUpperCase()}
+    </strong>
+
+    <div style={{ marginTop: 3 }}>계약 상태</div>
+
+    <strong style={{ color: '#92400e' }}>
+      {contract.status === 'completed'
+        ? '계약 체결 완료'
+        : '계약 동의 진행 중'}
+    </strong>
+  </div>
+</div>
+
+{/* 1. 계약 당사자 */}
+<div style={{ marginBottom: 9 }}>
+  <div style={exportSectionTitleStyle}>1. 계약 당사자 정보</div>
+
+  <table style={exportTableStyle}>
+    <tbody>
+      <tr>
+        <td
+          colSpan="2"
+          style={{
+            ...exportHeaderCellStyle,
+            color: '#1e3a8a',
+          }}
+        >
+          광고주 정보
+        </td>
+
+        <td
+          colSpan="2"
+          style={{
+            ...exportHeaderCellStyle,
+            color: '#1e3a8a',
+          }}
+        >
+          크리에이터 정보
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>브랜드명</td>
+        <td style={exportValueCellStyle}>
+          {proposal.brand_name || '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}>이름</td>
+        <td style={exportValueCellStyle}>
+          {creatorProfile?.name || '-'}
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>담당자</td>
+        <td style={exportValueCellStyle}>
+          {advertiserProfile?.name || '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}>연락처</td>
+        <td style={exportValueCellStyle}>
+          {creatorProfile?.contact || '-'}
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>연락처</td>
+        <td style={exportValueCellStyle}>
+          {advertiserProfile?.contact || '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}>이메일</td>
+        <td style={exportValueCellStyle}>
+          {creatorProfile?.email || '-'}
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>이메일</td>
+        <td style={exportValueCellStyle}>
+          {advertiserProfile?.email || '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}></td>
+        <td style={exportValueCellStyle}></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{/* 2. 계약 기본 정보 */}
+<div style={{ marginBottom: 9 }}>
+  <div style={exportSectionTitleStyle}>2. 계약 기본 정보</div>
+
+  <table style={exportTableStyle}>
+    <tbody>
+      <tr>
+        <td style={exportLabelCellStyle}>계약명</td>
+        <td style={exportValueCellStyle}>
+          {contract.contract_title || '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}>콘텐츠 유형</td>
+        <td style={exportValueCellStyle}>
+          {contract.content_type || '-'}
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>업로드 채널</td>
+        <td style={exportValueCellStyle}>
+          {Array.isArray(contract.channel_items)
+            ? contract.channel_items
+                .map((item) => item.channel)
+                .join(', ')
+            : '-'}
+        </td>
+
+        <td style={exportLabelCellStyle}>업로드 예정일</td>
+        <td style={exportValueCellStyle}>
+          {formatDate(contract.due_date)}
+        </td>
+      </tr>
+
+      <tr>
+        <td style={exportLabelCellStyle}>수정 가능 횟수</td>
+        <td style={exportValueCellStyle}>
+          {contract.revision_count ?? 0}회
+        </td>
+
+        <td style={exportLabelCellStyle}>2차 활용</td>
+        <td style={exportValueCellStyle}>
+          {contract.secondary_usage || '-'}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{/* 3. 협업 내용 */}
+<div style={{ marginBottom: 9 }}>
+  <div style={exportSectionTitleStyle}>3. 협업 내용</div>
+
+  <div style={exportBoxStyle}>
+    {contract.work_scope || '-'}
+  </div>
+</div>
+
+{/* 4. 비용 */}
+<div style={{ marginBottom: 9 }}>
+  <div style={exportSectionTitleStyle}>4. 비용 내역</div>
+
+  <table style={exportTableStyle}>
+    <tbody>
+      {Array.isArray(contract.channel_items) &&
+        contract.channel_items.map((item, index) => (
+          <tr key={index}>
+            <td style={exportLabelCellStyle}>
+              {item.channel || `채널 ${index + 1}`}
+            </td>
+
+            <td style={exportValueCellStyle}>
+              {Number(item.amount || 0).toLocaleString()}원
+            </td>
+          </tr>
+        ))}
+
+      <tr>
+        <td style={exportLabelCellStyle}>계약 금액</td>
+        <td style={exportValueCellStyle}>
+          {Number(contract.payment_amount || 0).toLocaleString()}원
+        </td>
+      </tr>
+
+      <tr>
+  <td
+    style={{
+      ...exportLabelCellStyle,
+      borderTop: '3px solid #1e3a8a',
+      background: '#f8fafc',
+      fontWeight: 800,
+    }}
+  >
+    총 금액
+  </td>
+
+  <td
+    style={{
+      ...exportValueCellStyle,
+      borderTop: '3px solid #1e3a8a',
+      background: '#f8fafc',
+      fontWeight: 800,
+    }}
+  >
+    {Number(
+      (contract.payment_amount || 0) -
+      (contract.discount_amount || 0)
+    ).toLocaleString()}원
+  </td>
+</tr>
+
+{contract.settlement_type === 'freelancer' ? (
+  <tr>
+    <td
+      style={{
+        ...exportLabelCellStyle,
+        background: '#f8fafc',
+      }}
+    >
+      3.3% 공제
+    </td>
+
+    <td
+      style={{
+        ...exportValueCellStyle,
+        background: '#f8fafc',
+      }}
+    >
+      -{Number(contract.withholding_amount || 0).toLocaleString()}원
+    </td>
+  </tr>
+) : (
+  <tr>
+    <td
+      style={{
+        ...exportLabelCellStyle,
+        background: '#f8fafc',
+      }}
+    >
+      부가세 (10%)
+    </td>
+
+    <td
+      style={{
+        ...exportValueCellStyle,
+        background: '#f8fafc',
+      }}
+    >
+      {Number(contract.vat_amount || 0).toLocaleString()}원
+    </td>
+  </tr>
+)}
+
+<tr>
+  <td
+    style={{
+      ...exportLabelCellStyle,
+      background: '#eff6ff',
+      color: '#1e3a8a',
+      fontWeight: 900,
+    }}
+  >
+    {contract.settlement_type === 'freelancer'
+  ? '실지급 금액'
+  : '최종 결제 금액'}
+  </td>
+
+  <td
+    style={{
+      ...exportValueCellStyle,
+      background: '#eff6ff',
+      color: '#1e3a8a',
+      fontWeight: 900,
+      fontSize: 15,
+    }}
+  >
+    {Number(contract.final_amount || 0).toLocaleString()}원
+  </td>
+</tr>
+    </tbody>
+  </table>
+</div>
+
+{/* 5 + 6 가로 배치 */}
+<div
+  style={{
+    display: 'grid',
+    gridTemplateColumns: '0.75fr 1.7fr',
+    gap: 10,
+    marginBottom: 9,
+  }}
+>
+  <div>
+    <div style={exportSectionTitleStyle}>5. 결제 방식</div>
+
+    <div
+      style={{
+        ...exportBoxStyle,
+        minHeight: 58,
+        fontWeight: 700,
+      }}
+    >
+      {contract.payment_method === 'card'
+        ? '☑ 카드결제'
+        : '☑ 계좌이체'}
+    </div>
+  </div>
+
+  <div>
+    <div style={exportSectionTitleStyle}>6. 계약 조건</div>
+
+    <div
+      style={{
+        ...exportBoxStyle,
+        minHeight: 58,
+        fontSize: 9,
+        lineHeight: 1.45,
+      }}
+    >
+      <div>1. 크리에이터는 합의된 협업 내용과 일정에 따라 콘텐츠를 제작·제출합니다.</div>
+      <div>2. 광고주는 계약 범위 내에서 콘텐츠 검수 및 수정을 요청할 수 있습니다.</div>
+      <div>3. 추가 제작 및 재촬영은 양측 협의에 따라 별도 비용이 발생할 수 있습니다.</div>
+      <div>4. 저작권 및 2차 활용은 계약 내용과 양측의 별도 합의에 따릅니다.</div>
+    </div>
+  </div>
+</div>
+
+{/* 7. 특약 */}
+<div style={{ marginBottom: 8 }}>
+  <div style={exportSectionTitleStyle}>7. 특약 사항</div>
+
+  <div style={exportBoxStyle}>
+    {contract.special_terms || '별도의 특약 사항이 없습니다.'}
+  </div>
+</div>
+
+{/* 서명 영역은 맨 아래 */}
+<div
+  style={{
+    marginTop: 'auto',
+    borderTop: '2px solid #1e3a8a',
+    paddingTop: 8,
+  }}
+>
+  <div
+    style={{
+      textAlign: 'center',
+      fontSize: 10,
+      marginBottom: 8,
+    }}
+  >
+    광고주와 크리에이터는 위 계약 내용을 충분히 확인하였으며 이에 동의합니다.
+  </div>
+
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: 30,
+    }}
+  >
+    <div style={exportSignatureStyle}>
+      <div style={{ color: '#6b7280', fontSize: 9 }}>
+        광고주
+      </div>
+
+      <strong>
+        {advertiserProfile?.name ||
+          proposal.brand_name ||
+          '광고주'}
+      </strong>
+
+      <div style={{ marginTop: 5 }}>
+        {contract.advertiser_agreed
+          ? '✓ 동의 완료'
+          : '동의 대기'}
+      </div>
+
+      <div style={{ marginTop: 4, fontSize: 8, color: '#6b7280' }}>
+        {contract.advertiser_agreed_at
+          ? formatDateTime(contract.advertiser_agreed_at)
+          : ''}
+      </div>
+    </div>
+
+    <div style={exportSignatureStyle}>
+      <div style={{ color: '#6b7280', fontSize: 9 }}>
+        크리에이터
+      </div>
+
+      <strong>
+        {creatorProfile?.name || '크리에이터'}
+      </strong>
+
+      <div style={{ marginTop: 5 }}>
+        {contract.creator_agreed
+          ? '✓ 동의 완료'
+          : '동의 대기'}
+      </div>
+
+      <div style={{ marginTop: 4, fontSize: 8, color: '#6b7280' }}>
+        {contract.creator_agreed_at
+          ? formatDateTime(contract.creator_agreed_at)
+          : ''}
+      </div>
+    </div>
+  </div>
+
+  <div
+    style={{
+      textAlign: 'center',
+      fontWeight: 900,
+      fontSize: 16,
+      marginTop: 8,
+    }}
+  >
+    광고<span style={{ color: '#6c5ce7' }}>잇다</span>
+  </div>
+</div>
+</div>
+
+  {/* 계약 동의 버튼 */}
+  {contract.status !== 'completed' &&
+    !(
+      (isAdvertiser && contract.advertiser_agreed) ||
+      (isCreator && contract.creator_agreed)
+    ) && (
+      <button
+  type="button"
+  onClick={downloadContractImage}
+  style={{
+    ...secondaryButtonStyle,
+    marginTop: 16,
+  }}
+>
+  계약서 이미지 저장
+</button>
+)}
+
+{/* 계약 동의 버튼 */}
+{contract.status !== 'completed' &&
+  !(
+    (isAdvertiser && contract.advertiser_agreed) ||
+    (isCreator && contract.creator_agreed)
+  ) && (
+    <button
+      type="button"
+      disabled={agreeing}
+      onClick={agreeContract}
+      style={{
+        ...primaryButtonStyle,
+        marginTop: 24,
+      }}
+    >
+      {agreeing
+        ? '처리 중...'
+        : '계약 내용 확인 및 동의'}
+    </button>
+  )}
+
+{/* 계약서 폐기 버튼 */}
+{isCreator &&
+  contract &&
+  !contract.is_voided &&
+  (contract.advertiser_agreed || contract.creator_agreed) && (
+    <button
+      type="button"
+      onClick={voidContract}
+      style={{
+        ...secondaryButtonStyle,
+        marginTop: 12,
+        borderColor: '#dc2626',
+        color: '#dc2626',
+      }}
+    >
+      계약서 폐기
+    </button>
+  )}
+
+{contract.status === 'completed' && (
+  <div style={completedContractStyle}>
+    ✓ 광고주와 크리에이터의 동의가 완료되어 계약이 체결되었습니다.
+  </div>
+)}
+
+</div>
             )}
           </div>
         </section>
@@ -1094,7 +2778,6 @@ export default function WorkspacePage() {
     </main>
   );
 }
-
 function FormField({ label, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -1122,7 +2805,28 @@ function InfoItem({ label, value }) {
     </div>
   );
 }
+function ContractSection({ title, children }) {
+  return (
+    <section
+      style={{
+        marginTop: 26,
+      }}
+    >
+      <h2
+        style={{
+          margin: '0 0 10px',
+          paddingBottom: 8,
+          borderBottom: '1px solid #d1d5db',
+          fontSize: 16,
+        }}
+      >
+        {title}
+      </h2>
 
+      {children}
+    </section>
+  );
+}
 function ContractItem({ label, value }) {
   return (
     <div style={contractItemStyle}>
@@ -1133,6 +2837,7 @@ function ContractItem({ label, value }) {
           whiteSpace: 'pre-wrap',
           lineHeight: 1.7,
         }}
+        
       >
         {value}
       </p>
@@ -1417,4 +3122,151 @@ const emptyMessageStyle = {
   textAlign: 'center',
   color: '#6b7280',
   marginTop: 40,
+};
+const contractPreviewWrapperStyle = {
+  marginTop: 28,
+  padding: '40px 20px',
+  background: '#eef0f3',
+  borderRadius: 14,
+  textAlign: 'center',
+};
+
+const a4ContractStyle = {
+  width: '210mm',
+  minHeight: '297mm',
+  margin: '0 auto',
+  padding: '10mm 10mm 8mm',
+  boxSizing: 'border-box',
+  background: '#ffffff',
+  color: '#111827',
+  textAlign: 'left',
+  boxShadow: '0 10px 35px rgba(0,0,0,0.12)',
+  minHeight: '297mm',
+};
+
+const contractInfoBoxStyle = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 20,
+  padding: '16px 18px',
+  background: '#f9fafb',
+  border: '1px solid #e5e7eb',
+  marginBottom: 30,
+};
+
+const contractPartyGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 16,
+};
+
+const contractPartyBoxStyle = {
+  padding: 16,
+  border: '1px solid #d1d5db',
+};
+
+const contractLabelStyle = {
+  display: 'block',
+  marginBottom: 6,
+  color: '#6b7280',
+  fontSize: 12,
+};
+
+const contractTextStyle = {
+  margin: 0,
+  fontSize: 14,
+  lineHeight: 1.9,
+  whiteSpace: 'pre-wrap',
+};
+
+const contractHighlightStyle = {
+  margin: '0 0 8px',
+  fontSize: 19,
+  fontWeight: 800,
+};
+
+const signatureGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: '1fr 1fr',
+  gap: 18,
+};
+
+const signatureBoxStyle = {
+  minHeight: 55,
+  padding: 8,
+  textAlign: 'center',
+  borderBottom: '1px solid #111827',
+};
+
+const signatureDateStyle = {
+  display: 'block',
+  marginTop: 8,
+  color: '#6b7280',
+  fontSize: 12,
+};
+const contractTableLabelStyle = {
+  padding: 7,
+  background: '#f8fafc',
+  border: '1px solid #cbd5e1',
+  fontWeight: 700,
+  width: '18%',
+};
+
+const contractTableValueStyle = {
+  padding: 7,
+  border: '1px solid #cbd5e1',
+  width: '32%',
+};
+
+const exportSectionTitleStyle = {
+  fontSize: 12,
+  fontWeight: 900,
+  color: '#1e3a8a',
+  marginBottom: 5,
+};
+
+const exportTableStyle = {
+  width: '100%',
+  borderCollapse: 'collapse',
+  tableLayout: 'fixed',
+  fontSize: 10,
+};
+
+const exportHeaderCellStyle = {
+  padding: 6,
+  background: '#eff6ff',
+  border: '1px solid #cbd5e1',
+  fontWeight: 900,
+};
+
+const exportLabelCellStyle = {
+  width: '18%',
+  padding: 5,
+  background: '#f8fafc',
+  border: '1px solid #cbd5e1',
+  fontWeight: 700,
+  verticalAlign: 'middle',
+};
+
+const exportValueCellStyle = {
+  padding: 5,
+  border: '1px solid #cbd5e1',
+  verticalAlign: 'middle',
+  wordBreak: 'break-word',
+};
+
+const exportBoxStyle = {
+  padding: 7,
+  border: '1px solid #cbd5e1',
+  minHeight: 24,
+  fontSize: 10,
+  lineHeight: 1.4,
+  boxSizing: 'border-box',
+};
+
+const exportSignatureStyle = {
+  textAlign: 'center',
+  padding: '5px 10px',
+  borderBottom: '1px solid #111827',
+  fontSize: 10,
 };
